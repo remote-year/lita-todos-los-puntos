@@ -6,18 +6,20 @@ module Lita
       USER_POINTS_HASH_NAME = 'user_points'
 
       route(
-        /\s*give\s+(\d+)\s+points? to @(\w+)/i,
+        /\s*give\s+(\d+)\s+points?\s+to\s+@(\w+)\s*(for\s+(.+))?/i,
         :add_points,
         help: {
-          "give [n] points to @user" => "Adds [n] points to @user's score"
+          "give [n] points to @user" => "Adds [n] points to @user's score",
+          "give [n] points to @user for [something]" => "Adds [n] points to @user's score for [something]"
         }
       )
 
       route(
-        /\s*take\s+(\d+)\s+points?\s+from\s+@(\w+)/i,
+        /\s*take\s+(\d+)\s+points?\s+from\s+@(\w+)\s*(for\s+(.+))?/i,
         :take_points,
         help: {
-          "take [n] points from @user" => "Subtracts [n] points from @user's score"
+          "take [n] points from @user" => "Subtracts [n] points from @user's score",
+          "take [n] points from @user for [something]" => "Subtracts [n] points from @user's score for [something]"
         }
       )
 
@@ -33,7 +35,7 @@ module Lita
         /(whats|what is|what's) the score/i,
         :check_score,
         help: {
-          "whats the score" => "Replies with the top 2 users and their scores"
+          "whats the score" => "Replies with the top 4 users and their scores"
         }
       )
 
@@ -43,19 +45,25 @@ module Lita
         if user
           score = get_score_for_user(user)
           response.reply("@#{mention_name} has #{score['score']} points.")
+          unless score['give_reasons'].empty?
+            response.reply("@#{mention_name} has gained points for #{score['give_reasons'].shuffle.take(10).join(', ')}")
+          end
+          unless score['take_reasons'].empty?
+            response.reply("@#{mention_name} has lost points for #{score['take_reasons'].shuffle.take(10).join(', ')}")
+          end
         else
           response.reply("sorry. I can't find @#{mention_name}.")
         end
       end
 
       def check_score(response)
-        scores = redis.hgetall(USER_POINTS_HASH_NAME)
-        sorted_scores = scores.sort_by { |k, v| -Json.parse(v)['score'] }
+        scores = redis.hgetall(USER_POINTS_HASH_NAME).map { |k, v| [ k, JSON.parse(v) ] }
+        sorted_scores = scores.sort_by { |k, v| -(v['score']) }
         top_scores = sorted_scores.take(4)
         r = [ ]
-        top_scores.each_with_index do |score, index|
-          user = Lita::User.find_by_id(score_tuple.first)
-          score = score_tuple.last
+        top_scores.each_with_index do |score_data, index|
+          user = Lita::User.find_by_id(score_data.first)
+          score = score_data.last
           r << "In #{(index + 1).ordinalize} place with #{score['score']} points: @#{user.mention_name}"
         end
         response.reply(r.join("\n"))
@@ -68,8 +76,15 @@ module Lita
           score = get_score_for_user(user)
           additional_points = Integer(response.matches[0][0])
           score['score'] += additional_points
+          give_reason = response.matches[0][3]
+          if give_reason
+            score['give_reasons'] << give_reason
+            score['give_reasons'].uniq!
+          end
           set_score_for_user(user, score)
-          response.reply("ok! @#{mention_name} has #{score['score']} points now.")
+          response.reply("ok!")
+          response.reply("@#{mention_name} gained #{additional_points} points for #{give_reason}") if give_reason
+          response.reply("@#{mention_name} has #{score['score']} points now in total.")
         else
           response.reply("sorry. I can't find @#{mention_name}.")
         end
@@ -82,8 +97,15 @@ module Lita
           score = get_score_for_user(user)
           taken_points = Integer(response.matches[0][0])
           score['score'] -= taken_points
+          take_reason = response.matches[0][3]
+          if take_reason
+            score['take_reasons'] << take_reason
+            score['take_reasons'].uniq!
+          end
           set_score_for_user(user, score)
-          response.reply("ok! @#{mention_name} has #{score['score']} points now.")
+          response.reply("ok!")
+          response.reply("@#{mention_name} lost #{taken_points} points for #{take_reason}") if take_reason
+          response.reply("@#{mention_name} has #{score['score']} points now in total.")
         else
           response.reply("sorry. I can't find @#{mention_name}.")
         end
